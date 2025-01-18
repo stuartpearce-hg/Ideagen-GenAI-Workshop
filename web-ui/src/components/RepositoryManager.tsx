@@ -1,9 +1,16 @@
 import React, { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Box, Button, Input, VStack, Text } from '@chakra-ui/react';
-import { Select } from '@chakra-ui/select';
-import { useToast } from '@chakra-ui/toast';
-import { FormControl, FormLabel } from '@chakra-ui/form-control';
+import {
+  Stack,
+  PrimaryButton,
+  TextField,
+  Dropdown,
+  IDropdownOption,
+  Label,
+  MessageBar,
+  MessageBarType
+} from '@fluentui/react';
+import { Text } from '@fluentui/react-components';
 import { Repository } from '../shared/types';
 import { indexRepository } from '../shared/api';
 
@@ -15,111 +22,114 @@ export const RepositoryManager: React.FC<RepositoryManagerProps> = ({ onSelectRe
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [selectedRepo, setSelectedRepo] = useState<string>('');
   const [repoName, setRepoName] = useState('');
-  const toast = useToast();
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    setError(null);
+    setSuccess(null);
+
     // Validate file selection
     if (acceptedFiles.length === 0) {
-      toast({
-        title: 'No folder selected',
-        description: 'Please select a folder to index',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
+      setError('Please select a folder to index');
       return;
     }
     if (!repoName.trim()) {
-      toast({
-        title: 'Repository name required',
-        description: 'Please enter a name for the repository',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
+      setError('Please enter a name for the repository');
       return;
     }
+
     if (acceptedFiles.length > 0 && repoName) {
       try {
         const repo = await indexRepository(acceptedFiles[0], repoName);
         setRepositories(prev => [...prev, repo]);
-        toast({
-          title: 'Repository indexed',
-          description: `Successfully indexed ${repoName}`,
-          status: 'success',
-        });
+        setSuccess(`Successfully indexed ${repoName}`);
       } catch (error) {
-        toast({
-          title: 'Error',
-          description: 'Failed to index repository',
-          status: 'error',
-        });
+        setError('Failed to index repository');
       }
     }
-  }, [repoName, toast]);
+  }, [repoName]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     multiple: false,
   });
 
-  const handleRepoSelect = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const value = event.target.value;
-    setSelectedRepo(value);
-    onSelectRepo(value);
+  const handleRepoSelect = (_: React.FormEvent<HTMLDivElement>, option?: IDropdownOption) => {
+    if (option) {
+      setSelectedRepo(option.key as string);
+      onSelectRepo(option.key as string);
+    }
   };
 
   return (
-    <VStack spacing={4} width="100%" p={4}>
-      <Box
-        {...getRootProps()}
-        p={6}
-        border="2px dashed"
-        borderColor={isDragActive ? 'blue.500' : 'gray.200'}
-        borderRadius="md"
-        textAlign="center"
-      >
-        <input {...getInputProps()} />
-        <Text>
-          {isDragActive
-            ? 'Drop the folder here'
-            : 'Drag and drop a folder here, or click to select'}
-        </Text>
-      </Box>
+    <Stack tokens={{ childrenGap: 16 }} styles={{ root: { width: '100%', padding: 16 } }}>
+      {error && (
+        <MessageBar messageBarType={MessageBarType.error} onDismiss={() => setError(null)} isMultiline={false}>
+          {error}
+        </MessageBar>
+      )}
+      {success && (
+        <MessageBar messageBarType={MessageBarType.success} onDismiss={() => setSuccess(null)} isMultiline={false}>
+          {success}
+        </MessageBar>
+      )}
+      
+      <Stack.Item>
+        <div
+          {...getRootProps()}
+          style={{
+            padding: '24px',
+            border: `2px dashed ${isDragActive ? '#0078d4' : '#8a8886'}`,
+            borderRadius: '4px',
+            textAlign: 'center',
+            cursor: 'pointer'
+          }}
+        >
+          <input {...getInputProps()} />
+          <Text>
+            {isDragActive
+              ? 'Drop the folder here'
+              : 'Drag and drop a folder here, or click to select'}
+          </Text>
+        </div>
+      </Stack.Item>
 
-      <FormControl>
-        <FormLabel>Repository Name</FormLabel>
-        <Input
+      <Stack.Item>
+        <Label>Repository Name</Label>
+        <TextField
           placeholder="Enter repository name"
           value={repoName}
-          onChange={(e) => setRepoName(e.target.value)}
+          onChange={(_, newValue?: string) => setRepoName(newValue || '')}
         />
-      </FormControl>
+      </Stack.Item>
 
-      <Button
-        colorScheme="blue"
-        isDisabled={!repoName}
-        onClick={() => {
-          document.querySelector('input[type="file"]')?.click();
-        }}
-      >
-        Index Repository
-      </Button>
-
-      <FormControl>
-        <FormLabel>Select Repository</FormLabel>
-        <Select
-          placeholder="Choose a repository"
-          value={selectedRepo}
-          onChange={handleRepoSelect}
+      <Stack.Item>
+        <PrimaryButton
+          disabled={!repoName}
+          onClick={() => {
+            const fileInput = document.querySelector('input[type="file"]');
+            if (fileInput instanceof HTMLInputElement) {
+              fileInput.click();
+            }
+          }}
         >
-        {repositories.map((repo) => (
-          <option key={`${repo.name}-${repo.timestamp}`} value={repo.name}>
-            {repo.name} ({new Date(repo.timestamp).toLocaleString()})
-          </option>
-        ))}
-      </Select>
-      </FormControl>
-    </VStack>
+          Index Repository
+        </PrimaryButton>
+      </Stack.Item>
+
+      <Stack.Item>
+        <Label>Select Repository</Label>
+        <Dropdown
+          placeholder="Choose a repository"
+          selectedKey={selectedRepo}
+          onChange={handleRepoSelect}
+          options={repositories.map((repo) => ({
+            key: repo.name,
+            text: `${repo.name} (${new Date(repo.timestamp).toLocaleString()})`
+          }))}
+        />
+      </Stack.Item>
+    </Stack>
   );
 };
