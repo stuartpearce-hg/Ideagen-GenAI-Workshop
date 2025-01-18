@@ -19,6 +19,9 @@ from langchain.document_loaders.helpers import detect_file_encodings
 from langchain_community.vectorstores import FAISS
 
 # Security configurations
+# Base directory for all repository operations
+BASE_DIRECTORY = Path(get_db_path()).resolve()
+
 # Match exactly with build.py FileSystemModel suffixes
 ALLOWED_EXTENSIONS = {
     # Web and scripting languages
@@ -71,13 +74,26 @@ def validate_file_content(file_path: str) -> bool:
 
 def secure_path_join(*paths: str) -> str:
     """Securely join paths and ensure they're within the base directory."""
-    base_path = Path(get_db_path()).resolve()
     try:
-        full_path = base_path.joinpath(*paths).resolve()
+        # Resolve the full path, following symlinks
+        full_path = BASE_DIRECTORY.joinpath(*paths).resolve(strict=True)
+        
         # Ensure the resulting path is within the base directory
-        if not str(full_path).startswith(str(base_path)):
-            raise ValueError("Path traversal detected")
+        try:
+            full_path.relative_to(BASE_DIRECTORY)
+        except ValueError:
+            raise ValueError("Path traversal detected: path escapes base directory")
+            
+        # Ensure the parent directory exists and is within base directory
+        parent = full_path.parent.resolve(strict=True)
+        try:
+            parent.relative_to(BASE_DIRECTORY)
+        except ValueError:
+            raise ValueError("Path traversal detected: parent directory escapes base directory")
+            
         return str(full_path)
+    except FileNotFoundError:
+        raise ValueError("Path or parent directory does not exist")
     except Exception as e:
         raise ValueError(f"Invalid path: {str(e)}")
 
@@ -162,6 +178,9 @@ async def create_repository(name: str, file: UploadFile = File(...)):
         # Create repository directory with sanitized name and timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         repo_dirname = f"{sanitized_name}_{timestamp}"
+        
+        # Ensure base directory exists
+        BASE_DIRECTORY.mkdir(parents=True, exist_ok=True)
         
         try:
             # Use secure_path_join to create and validate repository path
