@@ -1,8 +1,12 @@
 import React, { useState } from 'react';
-import { Box, Button, Input, VStack, Text } from '@chakra-ui/react';
-import { useToast } from '@chakra-ui/toast';
-
-import { InputGroup, InputRightElement } from '@chakra-ui/input';
+import {
+  Stack,
+  PrimaryButton,
+  TextField,
+  MessageBar,
+  MessageBarType
+} from '@fluentui/react';
+import { Text } from '@fluentui/react-components';
 import { ChatMessage } from '../shared/types';
 import { queryRepository } from '../shared/api';
 
@@ -13,20 +17,14 @@ interface ChatInterfaceProps {
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedRepo }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const toast = useToast();
+  const [error, setError] = useState<string | null>(null);
 
   const handleSend = async () => {
     if (!input.trim()) {
-      toast({
-        title: 'Message required',
-        description: 'Please enter a message',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
+      setError('Please enter a message');
       return;
     }
-    if (!input.trim() || !selectedRepo) return;
+    if (!selectedRepo) return;
 
     const userMessage: ChatMessage = {
       role: 'user',
@@ -35,56 +33,69 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedRepo }) =>
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
+    setError(null);
 
     try {
       const response = await queryRepository(input, selectedRepo);
       setMessages(prev => [...prev, response]);
     } catch (error) {
-      toast({
-        title: 'Error',
-        description: 'Failed to get response',
-        status: 'error',
-      });
+      setError('Failed to get response');
     }
   };
 
   return (
-    <VStack spacing={4} width="100%" height="100%" p={4}>
-      <Box
-        flex={1}
-        w="full"
-        overflowY="auto"
-        borderRadius="md"
-        bg="gray.50"
-        p={4}
-      >
-        {messages.map((message, index) => (
-          <Box
-            key={index}
-            bg={message.role === 'user' ? 'blue.100' : 'white'}
-            p={2}
-            borderRadius="md"
-            mb={2}
+    <Stack styles={{
+        root: {
+          width: '100%',
+          height: '100%',
+          padding: 16,
+          gap: 16
+        }
+      }}>
+        {error && (
+          <MessageBar
+            messageBarType={MessageBarType.error}
+            onDismiss={() => setError(null)}
+            isMultiline={false}
           >
-            <Text>{message.content}</Text>
-          </Box>
-        ))}
-      </Box>
+            {error}
+          </MessageBar>
+        )}
+        <Stack.Item grow styles={{
+          root: {
+            overflowY: 'auto',
+            backgroundColor: '#f5f5f5',
+            padding: 16,
+            borderRadius: 4
+          }
+        }}>
+          {messages.map((message, index) => (
+            <Stack key={index} styles={{
+              root: {
+                backgroundColor: message.role === 'user' ? '#e5f1ff' : 'white',
+                padding: 8,
+                borderRadius: 4,
+                marginBottom: 8
+              }
+            }}>
+              <Text>{message.content}</Text>
+            </Stack>
+          ))}
+        </Stack.Item>
 
-      <InputGroup size="md">
-        <Input
-          pr="4.5rem"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Type your message..."
-          onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-        />
-        <InputRightElement width="4.5rem">
-          <Button h="1.75rem" size="sm" onClick={handleSend}>
+        <Stack horizontal tokens={{ childrenGap: 8 }}>
+          <Stack.Item grow>
+            <TextField
+              value={input}
+              onChange={(_, newValue?: string) => setInput(newValue || '')}
+              placeholder="Type your message..."
+              onKeyDown={(ev: React.KeyboardEvent<HTMLInputElement>) => ev.key === 'Enter' && handleSend()}
+            />
+          </Stack.Item>
+          <PrimaryButton onClick={handleSend}>
             Send
-          </Button>
-        </InputRightElement>
-      </InputGroup>
-    </VStack>
+          </PrimaryButton>
+        </Stack>
+      </Stack>
   );
 };
