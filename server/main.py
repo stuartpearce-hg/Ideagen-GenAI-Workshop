@@ -14,12 +14,32 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from workshop.config import get_db_path
 from workshop.integration import get_embeddings, get_qa
+from workshop.loaders import TextBlobLoader, FileSystemModel
+from langchain.document_loaders.helpers import detect_file_encodings
 from langchain_community.vectorstores import FAISS
 
 # Security configurations
-ALLOWED_EXTENSIONS = {'.php', '.html', '.js', '.cs', '.csproj', '.sln', '.json', 
-                     '.md', '.yml', '.yaml', '.sh', '.py', '.css', '.sql'}
+# Match exactly with build.py FileSystemModel suffixes
+ALLOWED_EXTENSIONS = {
+    # Web and scripting languages
+    '.php', '.html', '.js', '.py', '.css',
+    # C# and .NET
+    '.cs', '.csproj', '.sln',
+    # Data and config files
+    '.json', '.md', '.yml', '.yaml', '.xml',
+    # Shell scripts
+    '.sh',
+    # Database
+    '.sql',
+    # Visual Basic
+    '.vbp', '.frm', '.bas', '.cls',
+    # ABAP
+    '.abap', '.asddls', '.asbdef',
+    # PHP-specific
+    '.module', '.inc'
+}
 MAX_FILENAME_LENGTH = 255
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 def sanitize_repository_name(name: str) -> str:
     """Sanitize repository name to prevent path traversal and ensure safe names."""
@@ -31,6 +51,23 @@ def sanitize_repository_name(name: str) -> str:
 def validate_file_extension(filename: str) -> bool:
     """Check if the file extension is allowed."""
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+def validate_file_content(file_path: str) -> bool:
+    """Validate file content and encoding."""
+    try:
+        # Check if file is readable and has valid encoding
+        encodings = detect_file_encodings(file_path)
+        if not encodings:
+            return False
+            
+        # Try to read the file with detected encoding
+        with open(file_path, 'r', encoding=encodings[0]) as f:
+            # Read first few lines to verify content
+            for _ in range(5):
+                f.readline()
+        return True
+    except Exception:
+        return False
 
 def secure_path_join(*paths: str) -> str:
     """Securely join paths and ensure they're within the base directory."""
@@ -94,6 +131,21 @@ async def create_repository(name: str, file: UploadFile = File(...)):
                 detail="Invalid repository name"
             )
 
+        # Validate file size
+        file_size = 0
+        chunk_size = 8192  # 8KB chunks
+        
+        for chunk in file.file:
+            file_size += len(chunk)
+            if file_size > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)}MB"
+                )
+        
+        # Reset file position after reading
+        await file.seek(0)
+
         # Validate file extension and name
         file_suffix = Path(file.filename).suffix.lower()
         if not file_suffix:
@@ -104,7 +156,7 @@ async def create_repository(name: str, file: UploadFile = File(...)):
         if file_suffix not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File type not allowed. Allowed extensions: {', '.join(ALLOWED_EXTENSIONS)}"
+                detail=f"File type not allowed. Allowed extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
             )
 
         # Create repository directory with sanitized name and timestamp
@@ -132,6 +184,15 @@ async def create_repository(name: str, file: UploadFile = File(...)):
             # Save file using pathlib for secure path handling
             with Path(file_path).open("wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
+                
+            # Validate file content and encoding
+            if not validate_file_content(file_path):
+                # Clean up invalid file
+                Path(file_path).unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid file content or encoding"
+                )
         except (ValueError, OSError) as e:
             # Clean up repository directory if file save fails
             shutil.rmtree(repo_dir, ignore_errors=True)
