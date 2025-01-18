@@ -94,24 +94,51 @@ async def create_repository(name: str, file: UploadFile = File(...)):
                 detail="Invalid repository name"
             )
 
-        # Validate file extension
-        if not validate_file_extension(file.filename):
+        # Validate file extension and name
+        file_suffix = Path(file.filename).suffix.lower()
+        if not file_suffix:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File must have an extension"
+            )
+        if file_suffix not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"File type not allowed. Allowed extensions: {', '.join(ALLOWED_EXTENSIONS)}"
             )
 
-        # Create repository directory with sanitized name
-        timestamp = datetime.now().isoformat()
-        repo_dir = secure_path_join(f"{sanitized_name}_{timestamp}")
-        os.makedirs(repo_dir, exist_ok=True)
-
-        # Save uploaded file with sanitized filename
-        safe_filename = sanitize_repository_name(Path(file.filename).stem) + Path(file.filename).suffix
-        file_path = secure_path_join(f"{sanitized_name}_{timestamp}", safe_filename)
+        # Create repository directory with sanitized name and timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        repo_dirname = f"{sanitized_name}_{timestamp}"
         
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        try:
+            # Use secure_path_join to create and validate repository path
+            repo_dir = secure_path_join(repo_dirname)
+            Path(repo_dir).mkdir(parents=True, exist_ok=True)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid repository path: {str(e)}"
+            )
+
+        try:
+            # Create sanitized filename and validate full path
+            safe_filename = (
+                sanitize_repository_name(Path(file.filename).stem) + 
+                file_suffix
+            )
+            file_path = secure_path_join(repo_dirname, safe_filename)
+            
+            # Save file using pathlib for secure path handling
+            with Path(file_path).open("wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+        except (ValueError, OSError) as e:
+            # Clean up repository directory if file save fails
+            shutil.rmtree(repo_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to save file: {str(e)}"
+            )
 
         # TODO: Run build.py with the repository path
 
@@ -137,30 +164,37 @@ async def list_repositories():
         repositories = []
         db_path = Path(get_db_path()).resolve()
         
-        if db_path.exists():
-            for entry in db_path.iterdir():
-                if entry.is_dir():
-                    try:
-                        # Ensure the entry path is within the base directory
-                        if not str(entry).startswith(str(db_path)):
-                            continue
-                            
-                        # Parse repository name and timestamp
-                        if "_" not in entry.name:
-                            continue
-                            
-                        name, timestamp = entry.name.rsplit("_", 1)
-                        # Validate repository name
-                        if not re.match(r'^[\w\-]+$', name):
-                            continue
-                            
-                        repositories.append(Repository(
-                            name=name,
-                            timestamp=timestamp,
-                            path=str(entry)
-                        ))
-                    except (ValueError, IndexError):
-                        continue
+        if not db_path.exists():
+            return repositories
+
+        for entry in db_path.iterdir():
+            if not entry.is_dir():
+                continue
+
+            try:
+                # Validate entry path using secure_path_join
+                try:
+                    secure_path = secure_path_join(entry.name)
+                except ValueError:
+                    continue
+
+                # Parse and validate repository name and timestamp
+                if "_" not in entry.name:
+                    continue
+                
+                name, timestamp = entry.name.rsplit("_", 1)
+                sanitized_name = sanitize_repository_name(name)
+                
+                if not sanitized_name or sanitized_name != name:
+                    continue
+
+                repositories.append(Repository(
+                    name=sanitized_name,
+                    timestamp=timestamp,
+                    path=secure_path
+                ))
+            except (ValueError, IndexError):
+                continue
         
         return repositories
     except Exception as e:
@@ -184,23 +218,34 @@ async def chat(request: ChatRequest):
         db_path = Path(get_db_path()).resolve()
         repo_path = None
         
-        if db_path.exists():
-            for entry in db_path.iterdir():
-                if entry.is_dir() and entry.name.startswith(f"{sanitized_name}_"):
-                    try:
-                        # Ensure the entry path is within the base directory
-                        full_path = entry.resolve()
-                        if str(full_path).startswith(str(db_path)):
-                            repo_path = str(full_path)
-                            break
-                    except Exception:
-                        continue
-        
-        if not repo_path:
+        if not db_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository storage not found"
+            )
+
+        # Find the most recent repository with matching name
+        matching_repos = []
+        for entry in db_path.iterdir():
+            if not entry.is_dir():
+                continue
+
+            try:
+                if entry.name.startswith(f"{sanitized_name}_"):
+                    # Validate path using secure_path_join
+                    secure_path = secure_path_join(entry.name)
+                    matching_repos.append((secure_path, entry.name.split("_", 1)[1]))
+            except ValueError:
+                continue
+
+        if not matching_repos:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Repository not found"
             )
+
+        # Use the most recent repository
+        repo_path = max(matching_repos, key=lambda x: x[1])[0]
 
         # Initialize QA chain if not exists
         if repo_path not in qa_chains:
